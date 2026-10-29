@@ -1,0 +1,15 @@
+# Project dependencies
+requests>=2.31.0
+beautifulsoup4>=4.12.2
+lxml>=5.1.0
+pymysql>=1.1.0
+python-dotenv>=1.0.0
+faker>=23.2.0
+pandas>=2.2.1
+tqdm>=4.66.2
+pytest>=8.2.0
+# Optional for headless browsing (if needed)
+playwright>=1.41.0
+# For CSV handling
+openpyxl>=3.1.2
+

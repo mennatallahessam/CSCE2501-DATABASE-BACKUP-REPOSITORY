@@ -1,0 +1,66 @@
+# ======================
+# Environment & Secrets
+# ======================
+.env
+
+# ======================
+# Python
+# ======================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+*.spec
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+.venv/
+venv/
+env/
+ENV/
+
+# ======================
+# Jupyter Notebooks
+# ======================
+.ipynb_checkpoints/
+
+# ======================
+# Crawled / Generated Data
+# ======================
+raw/
+output/
+parsed.jsonl
+cleaned.jsonl
+crawler_state.jsonl
+
+# ======================
+# Test / Scratch Files
+# ======================
+test_location.py
+etl/test_location2.py
+scratch/
+
+# ======================
+# OS Files
+# ======================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ======================
+# IDEs & Editors
+# ======================
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# ======================
+# Logs
+# ======================
+*.log
+
