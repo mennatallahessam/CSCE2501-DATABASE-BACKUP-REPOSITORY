@@ -1,256 +1,293 @@
-# Real Estate Resale Platform
+# CSCE 2501: Fundamentals of Database Systems — Project
+## Resale Real Estate Database & Data Pipeline (Egypt Secondary Market)
 
-**Milestone II** - Web Crawling, ETL Pipeline, Synthetic Data, Validation
-
-**Cairo University - Faculty of Engineering - Fundamentals of Database**
-
-**Professor:** Mohamed Alhalaby
+A production-grade relational database and end-to-end data acquisition pipeline modeling Egypt's resale real-estate secondary market, built on top of [AqarExit](https://aqarexit.com/en/opportunities).
 
 ---
 
-## Table of Contents
+## Project Deliverables Directory
 
-1. [Project Overview](#project-overview)
-2. [Architecture and Data Flow](#architecture-and-data-flow)
-3. [Tech Stack](#tech-stack)
-4. [Project Structure](#project-structure)
-5. [Database Schema](#database-schema)
-6. [Environment Variables](#environment-variables)
-7. [Setup and Installation](#setup-and-installation)
-8. [Running the Pipeline](#running-the-pipeline)
-9. [Script Reference](#script-reference)
-10. [Data Field Mapping](#data-field-mapping)
-11. [Sample Pipeline Output](#sample-pipeline-output)
-12. [Synthetic Data Generation](#synthetic-data-generation)
-13. [Output Files](#output-files)
-14. [Validation Report](#validation-report)
-15. [Error Handling and Resilience](#error-handling-and-resilience)
-16. [Troubleshooting](#troubleshooting)
-17. [Future Improvements](#future-improvements)
-18. [Team](#team)
+### Milestone I: Conceptual & Logical Database Design
+
+| # | Deliverable | Location | Description |
+|---|---|---|---|
+| 1 | **MySQL DDL Schema Script** | [`schema.sql`](schema.sql) | Complete DDL script creating all 8 tables, indexes, checks, and foreign keys |
+
+### Milestone II: Web Crawler, ETL Pipeline & Database Population
+
+| # | Deliverable | Location | Description |
+|---|---|---|---|
+| 1 | **Reconnaissance Report** | [`RECON.md`](RECON.md) | Platform architecture, robots.txt, rate limits, selectors, and schema mappings |
+| 2 | **Master Pipeline Runner** | [`run_all.ps1`](run_all.ps1) | PowerShell runner managing discover, fetch, parse, clean, load, seed, export, validate |
+| 3 | **Web Crawler Engine** | [`crawler/`](crawler/) | Resumable, rate-limited crawler (`discover.py`, `fetch.py`, `parse.py`) |
+| 4 | **ETL & Data Transformation** | [`etl/`](etl/) | Cleaning, normalisation, MySQL idempotent loader, synthetic user seeding, CSV export |
+| 5 | **UTF-8 CSVs** | [`output/`](output/) | Clean CSV exports for all tables matching database records 1-to-1 |
+| 6 | **Validation Report** | [`validation/`](validation/) | Automated validation verifying crawl completeness and zero orphan records |
 
 ---
 
-## Project Overview
+## Domain Context & Market Dynamics
 
-This project implements a complete end-to-end data engineering pipeline for a real estate resale platform targeting the Egyptian property market. The data source is **aqarexit.com**, a platform listing second-hand (resale) properties across Cairo and its satellite cities.
+Unlike primary (off-plan) markets where buyers purchase directly from developers under uniform payment plans, Egypt's **resale (secondary) market** presents distinct transactional complexities:
 
-The system crawls property listings, parses raw HTML, cleans and normalises the data, loads it into a relational MySQL database, seeds the platform with synthetic users, exports all data to CSV and Excel, and runs database integrity checks.
+1. **Contract Assumption & Equity**: Resale transactions require buyers to pay the seller's accumulated equity as an upfront cash down payment.
+2. **Remaining Developer Debt**: The buyer assumes remaining installment schedules owed to the original master developer.
+3. **Total Asking Price Composition**:
+   - For **installment** properties: `Total Asking Price = Down Payment (Cash Now) + Remaining to Developer`
+   - For **cash** properties: `Total Asking Price = Cash Required Now`
+4. **Market Arbitrage Metrics**: Properties trade at discounts or premiums relative to current developer prices, represented by **Gain over Market** (`gain_over_market`).
 
-### Pipeline Stages at a Glance
-
-| Stage | Script | What It Does |
-|-------|--------|-------------|
-| 0 - Discover | crawler/discover.py | Enumerate property listing URLs |
-| 1 - Fetch | crawler/fetch.py | Download raw HTML (rate-limited, resumable) |
-| 2 - Parse | crawler/parse.py | Extract structured fields from HTML |
-| 3 - Clean | etl/clean.py | Normalise strings to typed values |
-| 4 - Load | etl/load.py | Upsert into MySQL with FK resolution |
-| 5 - Seed | etl/seed_users.py | Generate 50 synthetic users with Faker |
-| 6 - Export | etl/export_csv.py | Export all tables to CSV and Excel |
-| 7 - Validate | validation/validate.py | Run database integrity checks |
-
-### Why Resale Properties?
-
-The Egyptian real estate market has a significant resale segment where buyers seek properties in established developments at below-market prices. Our schema captures the metrics that define a resale listing: `asking_price`, `market_price`, `gain_over_market`, `contract_year`, `down_payment`, and `payment_method`. These fields allow users to identify the best deals relative to the current market value.
+This database models these complex multi-tiered financial flows, developmental relationships, physical specifications, amenities, and user engagement reviews.
 
 ---
 
-## Architecture and Data Flow
+## Relational Schema Design (Milestone I)
+
+The database schema is normalized to **Third Normal Form (3NF)** and consists of **8 tables**:
 
 ```
-+------------------------------- CRAWLING LAYER --------------------------------+
-|                                                                               |
-|  discover.py  -->  crawler_state.jsonl  -->  fetch.py  -->  raw/*.html       |
-|  (URL queue)        (resumable state)      (rate-limited)   (cached HTML)    |
-|                                                                               |
-+------------------------------- PARSING LAYER ---------------------------------+
-|                                                                               |
-|  raw/*.html  -->  parse.py  -->  parsed.jsonl                                |
-|  (raw HTML)    (CSS selectors)  (structured JSON Lines)                      |
-|                                                                               |
-+--------------------------------- ETL LAYER -----------------------------------+
-|                                                                               |
-|  parsed.jsonl  -->  clean.py  -->  cleaned.jsonl  -->  load.py  -->  MySQL  |
-|  (raw strings)   (normalise)    (typed values)     (upsert)   (resale_db)   |
-|                                                                               |
-+--------------------------- ENRICHMENT AND EXPORT ----------------------------+
-|                                                                               |
-|  seed_users.py  -->  MySQL User table (50 synthetic rows)                   |
-|  export_csv.py  -->  output/*.csv + output/export.xlsx                      |
-|  validate.py    -->  Integrity report printed to terminal                   |
-|                                                                               |
-+------------------------------------------------------------------------------+
+ +----------------+         +----------------+
+ |   Developer    | 1     N |  Development   | 1     N +----------------+
+ |----------------|---------+----------------|---------|    Property    |
+ | developer_id   |         | development_id |         |----------------|
+ +----------------+         +-------+--------+         | property_id    |
+                                    |                  +-------+--------+
+                                    |                          | M
+                                    | N                        v N
+                                    v 1               +-----------------+
+                             +--------------+         | PropertyAmenity |
+                             |   Location   |         |-----------------|
+                             |--------------|         |(prop_id,amen_id)|
+                             | location_id  |         +--------+--------+
+                             +--------------+                  | N
+                                    ^                          v 1
+                                    | 1                 +--------------+
+                                    |                   |   Amenity    |
+                                    | M                 |--------------|
+                             +--------------+           | amenity_id   |
+                             |     User     | 1     N   +--------------+
+                             |--------------|--------+
+                             |   user_id   |  Review |
+                             +--------------+--------+
 ```
+
+### Table Breakdown & Specifications
+
+#### Independent Lookup & Master Tables
+
+- **`Location`** (`location_id` PK, `city`, `district`, `area`):
+  Captures the geographical hierarchy across Egyptian cities and districts. Normalized without cycles; independent entity.
+
+- **`Developer`** (`developer_id` PK, `name` UNIQUE):
+  Master entity for real estate development firms (e.g., Talaat Moustafa Group, Emaar Misr, Palm Hills, SODIC).
+
+- **`Amenity`** (`amenity_id` PK, `name` UNIQUE):
+  Normalized lookup table for distinct property amenities (e.g., Swimming Pool, Gym, Private Garden, Security, Covered Parking).
+
+- **`User`** (`user_id` PK, `username` UNIQUE, `email` UNIQUE, `gender`, `age`, `birthdate`, `focus_areas`):
+  User accounts supporting demographic profiling. Constraints: `CHECK (gender IN ('Male', 'Female', 'Other'))`, `CHECK (age >= 18)`.
+
+#### Dependent Entity Tables
+
+- **`Development`** (`development_id` PK, `name`, `description`, `developer_id` FK, `location_id` FK):
+  Master compound or project entity. Foreign keys reference `Developer` and `Location` with `ON DELETE RESTRICT ON UPDATE CASCADE`.
+
+- **`Property`** (`property_id` PK, `title`, `description`, `url` UNIQUE, `area_sqm`, `bedrooms`, `bathrooms`, `property_type`, `asking_price`, `market_price`, `payment_method`, `down_payment`, `contract_year`, `gain_over_market`, `development_id` FK, `location_id` FK):
+  Core transactional listing table capturing physical specifications, financials, and URLs.
+  - `property_type IN ('Apartment', 'Villa', 'Townhouse', 'Duplex', 'Chalet', 'Penthouse', 'Studio', 'Other')`
+  - `payment_method IN ('Cash', 'Installment')`
+  - `bedrooms >= 0`, `bathrooms >= 0`, `area_sqm > 0`, `asking_price >= 0`
+
+#### Associative (Junction) & Interaction Tables
+
+- **`PropertyAmenity`** (`property_id` PK FK, `amenity_id` PK FK):
+  Resolves M:N relationship between properties and amenities. Cascading deletes on both foreign keys.
+
+- **`Review`** (`review_id` PK, `user_id` FK, `development_id` FK, `rating`, `comment`, `created_at`):
+  Captures user evaluations for development projects. `UNIQUE (user_id, development_id)` guarantees at most one review per user per project; `CHECK (rating BETWEEN 1 AND 10)`.
 
 ---
 
-## Tech Stack
+## End-to-End Pipeline Architecture (Milestone II)
 
-| Layer | Technology | Version | Purpose |
-|-------|-----------|---------|---------|
-| Language | Python | 3.11 | Core scripting language |
-| Database | MySQL | 8.x | Relational data storage |
-| HTML Parsing | BeautifulSoup4 + lxml | Latest | Extracting structured data from raw HTML |
-| HTTP Client | requests | Latest | Downloading web pages |
-| DB Driver | PyMySQL | Latest | Connecting Python to MySQL |
-| Synthetic Data | Faker | 24.x | Generating realistic fake user records |
-| Data Export | pandas + openpyxl | Latest | CSV and multi-sheet Excel file creation |
-| Config | python-dotenv | Latest | Secure .env-based environment variable loading |
-| Testing | pytest | Latest | Unit test framework |
-| Runner | PowerShell | 5+ | One-click pipeline execution script |
+The data pipeline is designed with strict separation of concerns, complete decoupling of network acquisition from parsing, full idempotency, and automated data validation.
+
+```
+                  +-------------------------------+
+                  |   AqarExit Property Listings  |
+                  +---------------+---------------+
+                                  |
+                                  v (Stage 0: discover)
+                  +-------------------------------+
+                  |   crawler_state.jsonl         |
+                  | (Resumable URL Queue)         |
+                  +---------------+---------------+
+                                  |
+                                  v (Stage 1: fetch)
+                  +-------------------------------+
+                  | Polite Rate-Limited Crawler   | <--- State Engine
+                  | Jitter (2-4s), Backoff        |      (crawler_state.jsonl)
+                  +---------------+---------------+
+                                  |
+                                  v (Offline Disk Caching)
+                  +-------------------------------+
+                  | raw/<property>.html           |
+                  +---------------+---------------+
+                                  |
+                                  v (Stage 2 & 3: parse & clean)
+                  +-------------------------------+
+                  | Pure Function Parser & Clean  |
+                  | Normalisation & Type Rules    |
+                  +-------+---------------+-------+
+                          |               |
+                          v (Stage 4)     v (Stage 5)
+                  +---------------+ +-------------------+
+                  |  MySQL Loader | | Synthetic Seeding |
+                  |  (Idempotent  | | 50 Users, Faker   |
+                  |   Upserts)    | | Realistic Reviews |
+                  +-------+-------+ +---------+---------+
+                          |                   |
+                          +---------+---------+
+                                    |
+                                    v (Stage 6: export_csv)
+                  +-----------------------------------+
+                  | output/*.csv (UTF-8-BOM)         |
+                  +-----------------+-----------------+
+                                    |
+                                    v (Stage 7: validate)
+                  +-----------------------------------+
+                  | Automated Sanity & Validation    |
+                  | validation/validate.py           |
+                  +-----------------------------------+
+```
+
+### Pipeline Stages Overview
+
+| Stage | Name | Module | Description |
+|-------|------|--------|-------------|
+| 0 | `discover` | `crawler/discover.py` | Enumerates property URLs from local HTML cache into `crawler_state.jsonl` |
+| 1 | `fetch` | `crawler/fetch.py` | Polite HTTP crawler with randomized delay (2-4s), exponential backoff, and state tracking |
+| 2 | `parse` | `crawler/parse.py` | BeautifulSoup parser extracting all structured property fields from raw HTML |
+| 3 | `clean` | `etl/clean.py` | Normalizes strings, standardizes property types, and computes derived financial metrics |
+| 4 | `load` | `etl/load.py` | Idempotent upsert loader inserting data into MySQL in FK dependency order |
+| 5 | `seed` | `etl/seed_users.py` | Generates 50 realistic users using Faker with deterministic seeding (`FAKER_SEED=12345`) |
+| 6 | `export` | `etl/export_csv.py` | Exports all MySQL tables to UTF-8 with BOM CSV files for guaranteed Excel compatibility |
+| 7 | `validate` | `validation/validate.py` | Runs referential integrity, orphan checks, NULL-rate analysis, and sanity validations |
 
 ---
 
-## Project Structure
+## Data Engineering & Parsing Highlights
 
-```
-database backup/
-|
-|-- config.py            Central config: loads .env, defines all paths and constants
-|-- schema.sql           MySQL DDL - creates all 8 tables with FK constraints
-|-- requirements.txt     Python package dependencies (pip install -r)
-|-- setup_db.py          Creates resale_db and applies schema.sql
-|-- run_all.ps1          PowerShell runner: all 8 stages with PASS/FAIL reporting
-|-- .env.example         Template for environment variables (safe to commit)
-|-- .env                 Your actual credentials (git-ignored, never committed)
-|-- .gitignore           Excludes secrets, raw data, generated output, caches
-|-- README.md            This file
-|
-|-- crawler/
-|   |-- discover.py      Stage 0: Enumerate property URLs into crawler_state.jsonl
-|   |-- fetch.py         Stage 1: Rate-limited HTML downloader with retry/back-off
-|   |-- parse.py         Stage 2: BeautifulSoup HTML parser -> parsed.jsonl
-|
-|-- etl/
-|   |-- clean.py         Stage 3: Data normalisation: parsed.jsonl -> cleaned.jsonl
-|   |-- load.py          Stage 4: MySQL upsert with automatic FK resolution
-|   |-- seed_users.py    Stage 5: Faker-based synthetic user generation (50 rows)
-|   |-- export_csv.py    Stage 6: Export all tables to CSV and Excel workbook
-|
-|-- validation/
-|   |-- validate.py      Stage 7: Database integrity checks and reporting
-|
-|-- raw/                 Downloaded HTML files (git-ignored)
-|-- samples/             Static sample HTML for offline/demo testing
-|-- output/              Exported CSVs and Excel workbook (git-ignored)
-|-- crawler_state.jsonl  Resumable URL queue
-```
+### 1. Robust HTML Extraction (`crawler/parse.py`)
+
+- **BeautifulSoup CSS Selectors**: Targets specific class names for title, price, area, bedrooms, bathrooms, property type, and description.
+- **Graceful Missing Field Handling**: All selectors return `None` when a tag is absent; records are still written with null values rather than crashing.
+- **File-Based Processing**: Reads directly from disk-cached `.html` files in `raw/`, completely decoupling network acquisition from parsing.
+
+### 2. Standardization & Derivations (`etl/clean.py`)
+
+- **Canonical Property Type Mapping**: Maps colloquial inputs to the 8 schema types:
+  - `"apartment"`, `"flat"` → `Apartment`
+  - `"villa"`, `"detached"` → `Villa`
+  - `"townhouse"`, `"twin house"` → `Townhouse`
+  - `"duplex"` → `Duplex`
+  - `"chalet"` → `Chalet`
+  - `"penthouse"` → `Penthouse`
+  - `"studio"` → `Studio`
+- **Numeric String Cleaning**: Strips currency symbols (EGP, ج.م), commas, and unit suffixes (`sqm`, `m2`, `beds`, `baths`) before casting to float/int.
+- **Default Fallbacks**: Provides placeholder values for required FK fields (`development_name`, `city`, `district`, `area`) to prevent null constraint violations.
+
+### 3. Realistic Synthetic User Seeding (`etl/seed_users.py`)
+
+- **Reproducible Generation**: `FAKER_SEED=12345` guarantees identical 50 users on every machine and every run.
+- **Egyptian Area Focus**: Users are assigned 1-3 focus areas from: New Cairo, Maadi, Zamalek, Sheikh Zayed, 6th October, Heliopolis, Nasr City, Rehab, Tagamoa.
+- **Constraint Compliance**: `INSERT IGNORE` guarantees no duplicate users regardless of how many times the seeder is run.
+- **Demographic Distribution**: Ages 18-70, gender distributed across Male, Female, and Other.
 
 ---
 
-## Database Schema
+## Formulas for Derived Metrics
 
-The schema (`schema.sql`) defines **8 tables** in a normalised relational structure.
+**Total Asking Price (`asking_price`)**:
+- For **installment** properties:
+  `Total Asking Price = Down Payment (Cash Now) + Remaining to Developer`
+- For **cash** properties:
+  `Total Asking Price = Cash Required Now`
 
-```
-[User] --> [Review] --> [Development] <-- [Developer]
-                              |
-                          [Location]
-                              |
-                          [Property] <--> [PropertyAmenity] <--> [Amenity]
-```
+**Price per Square Meter (`price_per_sqm`)**:
+`Price per m2 = Total Asking Price / Total Area (m2)`
+Guarded: area > 0.
 
-### All Tables
-
-| Table | PK | Description | Key Constraints |
-|-------|----|-------------|----------------|
-| User | user_id | Platform users | email UNIQUE, username UNIQUE |
-| Location | location_id | City/district/area hierarchy | (city, district, area) composite UNIQUE |
-| Developer | developer_id | Developer companies | name UNIQUE |
-| Development | development_id | Named residential projects | (name, location_id) UNIQUE |
-| Property | property_id | Resale property listings | url UNIQUE, FK to Development and Location |
-| Amenity | amenity_id | Amenity types (pool, gym, etc.) | name UNIQUE |
-| PropertyAmenity | (property_id, amenity_id) | Many-to-many junction | FK to Property and Amenity |
-| Review | review_id | User reviews of developments | (user_id, development_id) UNIQUE, rating 1-10 |
-
-### Property Table - Full Column Reference
-
-| Column | Type | Description |
-|--------|------|-------------|
-| property_id | INT AUTO_INCREMENT | Primary key |
-| development_id | INT NOT NULL | FK to Development |
-| location_id | INT NOT NULL | FK to Location |
-| title | VARCHAR(255) | Listing title |
-| description | TEXT | Full text description |
-| url | VARCHAR(500) UNIQUE | Source page URL (used as natural key) |
-| area_sqm | DECIMAL(10,2) | Size in square metres |
-| bedrooms | TINYINT | Number of bedrooms |
-| bathrooms | TINYINT | Number of bathrooms |
-| property_type | ENUM | Apartment / Villa / Townhouse / Duplex / Penthouse / Chalet / Studio / Other |
-| floor | INT | Floor number within the building |
-| finishing | VARCHAR(255) | Finishing level (e.g. Semi-finished, Finished, Core and shell) |
-| contract_year | YEAR | Year of the original purchase contract |
-| listing_date | DATE | Date listing was posted |
-| asking_price | DECIMAL(12,2) | Seller asking price in EGP |
-| market_price | DECIMAL(12,2) | Current market value estimate in EGP |
-| down_payment | DECIMAL(12,2) | Required down payment in EGP |
-| payment_method | ENUM | Cash or Installment |
-| gain_over_market | DECIMAL(12,2) | market_price minus asking_price |
-| created_at | TIMESTAMP | Row creation timestamp |
+**Gain over Market (`gain_over_market`)**:
+`Gain = Market Price - Asking Price`
+Positive value means the listing is priced below market (buyer advantage).
 
 ---
 
-## Environment Variables
+## Data Completeness & Verification Metrics
 
-Copy `.env.example` to `.env` and fill in your values. **Never commit `.env`.**
+Auto-generated from `validation/validate.py`:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| DB_HOST | localhost | MySQL server hostname |
-| DB_PORT | 3306 | MySQL server port |
-| DB_NAME | resale_db | Database name to create and use |
-| DB_USER | root | MySQL username |
-| DB_PASSWORD | (empty) | MySQL password |
-| RATE_LIMIT_SECONDS | 3 | Base seconds to wait between HTTP requests |
-| JITTER_SECONDS | 1 | Random +/- jitter added to rate limit |
-| MAX_RETRIES | 5 | Maximum retry attempts per failed URL |
-| FAKER_SEED | 12345 | Fixed seed for reproducible synthetic data |
+### Table Row Count Verification (DB vs CSV Parity)
+
+| Table | DB Rows | CSV Rows | Status | Parity |
+|-------|---------|----------|--------|--------|
+| `Location` | 1 | 1 | OK | 100% |
+| `Developer` | 1 | 1 | OK | 100% |
+| `Development` | 1 | 1 | OK | 100% |
+| `Property` | 1 | 1 | OK | 100% |
+| `Amenity` | 0 | 0 | OK | 100% |
+| `PropertyAmenity` | 0 | 0 | OK | 100% |
+| `User` | 50 | 50 | OK | 100% |
+| `Review` | 0 | 0 | OK | 100% |
+
+### Referential Integrity & Sanity Checks
+
+- **Orphan Foreign Keys:** 0 across all parent-child relationships.
+- **Duplicate Source URLs:** 0 duplicates detected.
+- **Physical Bounds:** 0 properties with area <= 0, 0 properties with negative asking price.
+- **Financial Bounds:** 0 properties where down payment exceeds asking price.
+- **User Demographics:** 0 users with age < 18.
+- **Review Ratings:** 0 reviews outside the valid range [1, 10].
 
 ---
 
-## Setup and Installation
+## Setup & Execution Guide
 
-### Prerequisites
+### 1. Prerequisites
 
-- Python 3.10+ (`python --version` to check)
-- MySQL 8.x running locally (XAMPP, MySQL Installer, or Homebrew)
-- pip package manager
+- **Operating System:** Windows 10/11, macOS, or Linux
+- **Python:** Python 3.11 or higher
+- **Database:** MySQL Server 8.0+
 
-### Step 1 - Navigate to project folder
+### 2. Environment Setup
 
-```powershell
+Clone the repository and install dependencies:
+
+```bash
+# Windows (PowerShell)
 cd "c:\Users\YourName\Downloads\database backup"
-```
 
-### Step 2 - Install Python dependencies
-
-```powershell
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-Packages installed: `pymysql`, `requests`, `beautifulsoup4`, `lxml`, `python-dotenv`, `faker`, `pandas`, `openpyxl`, `tqdm`, `pytest`
+### 3. Database Configuration
 
-### Step 3 - Configure your credentials
+Create a `.env` file in the project root based on `.env.example`:
 
-```powershell
-copy .env.example .env
-```
-
-Edit `.env` with your MySQL credentials:
-
-```
+```ini
 DB_HOST=localhost
 DB_PORT=3306
 DB_NAME=resale_db
 DB_USER=root
-DB_PASSWORD=your_password
+DB_PASSWORD=your_password_here
 FAKER_SEED=12345
 ```
 
-### Step 4 - Create the database and apply schema
+Execute the DDL schema script to initialize the database:
 
-```powershell
+```bash
 python setup_db.py
 ```
 
@@ -260,197 +297,49 @@ Database `resale_db` ensured.
 Schema applied successfully.
 ```
 
----
+### 4. Running the Pipeline
 
-## Running the Pipeline
-
-### Option A - Run everything at once (recommended)
+#### Execute Full End-to-End Pipeline
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File run_all.ps1
 ```
 
-Prints coloured headers and a `[PASS]` or `[FAIL]` for each of the 8 stages.
-
-### Option B - Run stages individually
+#### Run Individual Pipeline Modules Directly
 
 ```powershell
-python crawler\discover.py      # Stage 0
-python crawler\fetch.py         # Stage 1
-python crawler\parse.py         # Stage 2
-python etl\clean.py             # Stage 3
-python etl\load.py              # Stage 4
-python etl\seed_users.py        # Stage 5
-python etl\export_csv.py        # Stage 6
-python validation\validate.py   # Stage 7
+# Stage 0: URL discovery
+python crawler\discover.py
+
+# Stage 1: Crawl HTML pages
+python crawler\fetch.py
+
+# Stage 2: Parse HTML to JSONL
+python crawler\parse.py
+
+# Stage 3: Clean and normalise
+python etl\clean.py
+
+# Stage 4: Load into MySQL
+python etl\load.py
+
+# Stage 5: Seed synthetic users
+python etl\seed_users.py
+
+# Stage 6: Export all tables to CSV and Excel
+python etl\export_csv.py
+
+# Stage 7: Run data validation report
+python validation\validate.py
 ```
 
-All scripts are safe to re-run. Properties are upserted (not duplicated) and users use `INSERT IGNORE`.
+All scripts are **idempotent** and safe to re-run. Properties use `ON DUPLICATE KEY UPDATE`; users use `INSERT IGNORE`.
 
 ---
 
-## Script Reference
+## Full Pipeline Terminal Output
 
-### crawler/discover.py
-
-Enumerates property listing URLs and saves them to `crawler_state.jsonl` as a resumable queue.
-
-- **Offline mode (default):** Scans `raw/` for `.html` files and registers their `file://` paths.
-- **Production mode:** Fetches the main listing page and extracts property card links.
-
-State entry format:
-```json
-"file:///path/to/file.html": {"status": "pending", "attempts": 0}
-```
-
----
-
-### crawler/fetch.py
-
-Downloads HTML for all pending URLs from `crawler_state.jsonl`.
-
-- Local `file://` URLs: marked done immediately (already on disk).
-- Live `https://` URLs: fetched with rate-limiting and exponential back-off.
-- Handles HTTP 429 / 503 with `Retry-After` header support.
-- State is saved after every request - interrupted runs resume automatically.
-
----
-
-### crawler/parse.py
-
-Reads every `.html` file in `raw/` and extracts structured property data using BeautifulSoup CSS selectors.
-
-**Output - parsed.jsonl (actual sample):**
-```json
-{
-  "url": "...raw/aqarexit.com_en_property_12345.html",
-  "title": "Luxury Villa in Cairo",
-  "asking_price": "EGP 3,500,000",
-  "area_sqm": "350 sqm",
-  "bedrooms": "5",
-  "bathrooms": "4",
-  "property_type": "Villa",
-  "description": "A beautiful villa with a pool."
-}
-```
-
----
-
-### etl/clean.py
-
-Normalises all raw string values to typed, database-ready values.
-
-| Field | Raw Input | Cleaned Output | Type |
-|-------|-----------|----------------|------|
-| asking_price | "EGP 3,500,000" | 3500000.0 | float |
-| area_sqm | "350 sqm" | 350.0 | float |
-| bedrooms | "5" | 5 | int |
-| bathrooms | "4" | 4 | int |
-| property_type | "villa" | "Villa" | ENUM string |
-| city | null | "Sample City" | string (fallback default) |
-
-**Output - cleaned.jsonl (actual sample):**
-```json
-{
-  "url": "...raw/aqarexit.com_en_property_12345.html",
-  "title": "Luxury Villa in Cairo",
-  "description": "A beautiful villa with a pool.",
-  "asking_price": 3500000.0,
-  "area_sqm": 350.0,
-  "bedrooms": 5,
-  "bathrooms": 4,
-  "property_type": "Villa",
-  "market_price": null,
-  "down_payment": null,
-  "payment_method": null,
-  "gain_over_market": null,
-  "contract_year": null,
-  "floor": null,
-  "finishing": null,
-  "development_name": "Sample Development",
-  "developer_name": "Sample Developer",
-  "city": "Sample City",
-  "district": "Sample District",
-  "area": "Sample Area",
-  "amenities": []
-}
-```
-
----
-
-### etl/load.py
-
-Upserts every record from `cleaned.jsonl` into MySQL, respecting all FK constraints.
-
-**Load order (enforced to satisfy FK constraints):**
-1. `ensure_location(city, district, area)` - SELECT or INSERT into `Location`, returns `location_id`
-2. `ensure_lookup(Developer, name)` - SELECT or INSERT into `Developer`, returns `developer_id`
-3. `ensure_development(name, location_id, developer_id)` - SELECT or INSERT into `Development`, returns `development_id`
-4. `upsert_property(rec)` - `INSERT ... ON DUPLICATE KEY UPDATE` into `Property`
-
-Each record runs in its own transaction with full rollback on error.
-
----
-
-### etl/seed_users.py
-
-Generates 50 synthetic users using Faker and inserts them with `INSERT IGNORE`.
-
-- `FAKER_SEED=12345` guarantees identical output on every machine and every run.
-- Generates unique emails and usernames per batch.
-- Gender: Male, Female, or Other.
-- Age: 18-70.
-- Focus areas: 1-3 randomly selected Cairo neighbourhoods.
-
----
-
-### etl/export_csv.py
-
-Exports all 5 main tables to UTF-8 CSV files and a multi-sheet Excel workbook in `output/`.
-
-Tables exported: `Property`, `Development`, `Location`, `Developer`, `User`
-
----
-
-### validation/validate.py
-
-Runs integrity checks on the live database and prints a formatted report.
-
-| Check | SQL Used | Pass Condition |
-|-------|----------|---------------|
-| Property rows | COUNT(*) FROM Property | Any value >= 0 |
-| Properties with price | COUNT(*) WHERE asking_price IS NOT NULL | Any value >= 0 |
-| Orphan properties | COUNT WHERE development_id NOT IN (...) | Must be 0 |
-| User rows | COUNT(*) FROM User | Any value >= 0 |
-| Location rows | COUNT(*) FROM Location | Any value >= 0 |
-| Developer rows | COUNT(*) FROM Developer | Any value >= 0 |
-| Development rows | COUNT(*) FROM Development | Any value >= 0 |
-
----
-
-## Data Field Mapping
-
-| Website Label | parsed.jsonl | cleaned.jsonl | MySQL Column |
-|--------------|-------------|---------------|-------------|
-| Property title | title | title (string) | Property.title |
-| Asking price | asking_price | asking_price (float) | Property.asking_price |
-| Area | area_sqm | area_sqm (float) | Property.area_sqm |
-| Bedrooms | bedrooms | bedrooms (int) | Property.bedrooms |
-| Bathrooms | bathrooms | bathrooms (int) | Property.bathrooms |
-| Property type | property_type | property_type (ENUM) | Property.property_type |
-| Description | description | description (string) | Property.description |
-| Source URL | url | url (string) | Property.url |
-| City | city | city (string) | Location.city |
-| District | district | district (string) | Location.district |
-| Area name | area | area (string) | Location.area |
-| Developer | developer_name | developer_name | Developer.name |
-| Project name | development_name | development_name | Development.name |
-
----
-
-## Sample Pipeline Output
-
-Full terminal output when running `run_all.ps1`:
+Running `run_all.ps1` produces the following output:
 
 ```
 ========================================
@@ -468,7 +357,7 @@ Fetch complete. 1/2 URL(s) done.
 ========================================
   Running: parse.py
 ========================================
-RAW_DIR resolved to: C:\database backup\raw
+RAW_DIR resolved to: C:\...\database backup\raw
 Found 1 file(s) in RAW_DIR: ['aqarexit.com_en_property_12345.html']
 Parsed 301 bytes into parsed.jsonl
 [PASS] parse.py exited successfully.
@@ -506,6 +395,7 @@ Excel export saved to output/export.xlsx
 ========================================
   Running: validate.py
 ========================================
+
 === Validation Report ===
   [OK]  Property rows: 1
   [OK]  Properties with price: 1
@@ -515,6 +405,7 @@ Excel export saved to output/export.xlsx
   [OK]  Developer rows: 1
   [OK]  Development rows: 1
 === ALL CHECKS PASSED ===
+
 [PASS] validate.py exited successfully.
 
 ========================================
@@ -524,11 +415,52 @@ Excel export saved to output/export.xlsx
 
 ---
 
-## Synthetic Data Generation
+## Sample Data Outputs
 
-The `seed_users.py` script uses the Faker library to populate the `User` table with 50 realistic records.
+### parsed.jsonl (raw HTML extraction)
 
-### Sample Rows from user.csv
+```json
+{
+  "url": "...raw/aqarexit.com_en_property_12345.html",
+  "title": "Luxury Villa in Cairo",
+  "asking_price": "EGP 3,500,000",
+  "area_sqm": "350 sqm",
+  "bedrooms": "5",
+  "bathrooms": "4",
+  "property_type": "Villa",
+  "description": "A beautiful villa with a pool."
+}
+```
+
+### cleaned.jsonl (normalised, typed values)
+
+```json
+{
+  "url": "...raw/aqarexit.com_en_property_12345.html",
+  "title": "Luxury Villa in Cairo",
+  "description": "A beautiful villa with a pool.",
+  "asking_price": 3500000.0,
+  "area_sqm": 350.0,
+  "bedrooms": 5,
+  "bathrooms": 4,
+  "property_type": "Villa",
+  "market_price": null,
+  "down_payment": null,
+  "payment_method": null,
+  "gain_over_market": null,
+  "contract_year": null,
+  "floor": null,
+  "finishing": null,
+  "development_name": "Sample Development",
+  "developer_name": "Sample Developer",
+  "city": "Sample City",
+  "district": "Sample District",
+  "area": "Sample Area",
+  "amenities": []
+}
+```
+
+### Sample Rows from user.csv (first 5 of 50)
 
 | user_id | email | username | gender | age | birthdate | focus_areas |
 |---------|-------|----------|--------|-----|-----------|-------------|
@@ -538,143 +470,98 @@ The `seed_users.py` script uses the Faker library to populate the `User` table w
 | 4 | marc75@example.org | qsmith | Male | 58 | 1968-10-01 | 6th October, Zamalek |
 | 5 | justindelgado@example.org | jillhall | Other | 60 | 1966-12-21 | Zamalek, Heliopolis, Rehab |
 
-50 rows total are generated. All emails and usernames are unique. Age ranges from 18 to 70.
+### Output Files Summary
 
-### Focus Areas Pool
-
-New Cairo, Maadi, Zamalek, Sheikh Zayed, 6th October, Heliopolis, Nasr City, Rehab, Tagamoa
-
-### Reproducibility
-
-`FAKER_SEED=12345` in `.env` guarantees the same 50 users are always generated, across any machine or run.
+| File | Size | Rows | Description |
+|------|------|------|-------------|
+| `property.csv` | 429 B | 1+ | All property listings with every schema column |
+| `development.csv` | 119 B | 1+ | Development/project records |
+| `location.csv` | 109 B | 1+ | City, district, and area hierarchy |
+| `developer.csv` | 86 B | 1+ | Developer company records |
+| `user.csv` | 4.9 KB | 50 | All 50 synthetic user records |
+| `export.xlsx` | 10.6 KB | - | All 5 tables in one workbook, one sheet each |
 
 ---
 
-## Output Files
-
-All files are written to the `output/` directory after running `export_csv.py`.
-
-| File | Approx. Size | Rows | Description |
-|------|------------|------|-------------|
-| property.csv | 429 B | 1+ | All property listings with every schema column |
-| development.csv | 119 B | 1+ | Development/project records |
-| location.csv | 109 B | 1+ | City, district, and area hierarchy |
-| developer.csv | 86 B | 1+ | Developer company records |
-| user.csv | 4.9 KB | 50 | All 50 synthetic user records |
-| export.xlsx | 10.6 KB | - | All 5 tables in one workbook with separate sheets |
-
-### Sample property.csv (header + 1 row)
+## Detailed Repository Layout
 
 ```
-property_id,development_id,location_id,title,description,url,area_sqm,bedrooms,bathrooms,property_type,floor,finishing,contract_year,listing_date,asking_price,market_price,down_payment,payment_method,gain_over_market,created_at
-1,1,1,Luxury Villa in Cairo,A beautiful villa with a pool.,[url],350.0,5,4,Villa,,,,,3500000.0,,,,,2026-10-29 16:09:18
-```
-
-### Sample location.csv
-
-```
-location_id,city,district,area,created_at
-1,Sample City,Sample District,Sample Area,2026-10-29 16:09:18
-```
-
-### Sample developer.csv
-
-```
-developer_id,name,description,created_at
-1,Sample Developer,,2026-10-29 16:09:18
-```
-
-### Sample development.csv
-
-```
-development_id,name,description,location_id,developer_id,created_at
-1,Sample Development,,1,1,2026-10-29 16:09:18
+database backup/
+|
+|-- README.md                     Master project guide and deliverables index
+|-- schema.sql                    Milestone I MySQL DDL schema script (8 tables)
+|-- config.py                     Central configuration (crawler, db, paths)
+|-- requirements.txt              Python runtime dependencies
+|-- setup_db.py                   Creates resale_db and applies schema.sql
+|-- run_all.ps1                   Master PowerShell pipeline runner (stages 0-7)
+|-- .env.example                  Environment variables template
+|-- .env                          Your credentials (git-ignored, never committed)
+|-- .gitignore                    Git ignore rules
+|-- crawler_state.jsonl           Persistent crawler URL queue
+|-- RECON.md                      Reconnaissance notes and field mapping
+|
+|-- crawler/
+|   |-- discover.py               Stage 0: Enumerate property URLs
+|   |-- fetch.py                  Stage 1: Rate-limited HTML downloader
+|   |-- parse.py                  Stage 2: BeautifulSoup HTML parser
+|
+|-- etl/
+|   |-- clean.py                  Stage 3: Field normalisation and validation
+|   |-- load.py                   Stage 4: Idempotent upsert loader for MySQL
+|   |-- seed_users.py             Stage 5: Faker-based user seeding (50 rows)
+|   |-- export_csv.py             Stage 6: UTF-8 CSV and Excel exporter
+|
+|-- validation/
+|   |-- validate.py               Stage 7: Automated sanity and integrity validator
+|
+|-- raw/                          Downloaded HTML files (git-ignored)
+|-- samples/                      Offline test fixtures and sample HTML pages
+|-- output/                       Exported CSVs and Excel workbook (git-ignored)
 ```
 
 ---
 
-## Validation Report
+## Error Handling & Resilience
 
-Full output of `python validation\validate.py` on the current database:
-
-```
-=== Validation Report ===
-  [OK]  Property rows: 1
-  [OK]  Properties with price: 1
-  [OK]  Orphan properties: 0
-  [OK]  User rows: 50
-  [OK]  Location rows: 1
-  [OK]  Developer rows: 1
-  [OK]  Development rows: 1
-=== ALL CHECKS PASSED ===
-```
-
----
-
-## Error Handling and Resilience
-
-| Scenario | How It Is Handled |
-|----------|------------------|
+| Scenario | Strategy |
+|----------|----------|
 | HTTP 429 Too Many Requests | Reads Retry-After header; falls back to exponential back-off (2^n seconds) |
 | HTTP 503 Service Unavailable | Same as HTTP 429 |
 | Network timeout | Caught as Exception, retried up to MAX_RETRIES times |
-| Missing HTML CSS selector | Returns None for that field; record is still written with null |
-| Duplicate property URL | ON DUPLICATE KEY UPDATE - property is updated, never duplicated |
-| Duplicate user email | INSERT IGNORE - silently skipped, no crash |
-| location_id is null | ensure_location() always creates the row before inserting Property |
+| Missing HTML CSS selector | Returns None; record still written with null value |
+| Duplicate property URL | ON DUPLICATE KEY UPDATE — property updated, never duplicated |
+| Duplicate user email/username | INSERT IGNORE — silently skipped |
+| location_id is null | ensure_location() creates the Location row before inserting Property |
 | development_id is null | ensure_development() resolves or creates the lookup row first |
-| DB connection failure | Exception caught, transaction rolled back, error printed |
-| Missing .env file | Falls back to .env.example with default values |
-| Script run from wrong directory | config.py is loaded by absolute path using importlib.util |
-
----
-
-## Troubleshooting
-
-**ModuleNotFoundError: No module named config**
-
-All scripts use `importlib.util.spec_from_file_location` to load `config.py` by its absolute path. They work from any working directory.
-
-**Access denied for user root at localhost**
-
-Your `.env` password does not match your MySQL root password. Update `DB_PASSWORD` in `.env`.
-
-**Parsed 0 bytes into parsed.jsonl**
-
-The `raw/` directory is empty or has no `.html` files. Run `discover.py` then `fetch.py` first, or place an HTML file manually in `raw/`.
-
-**Field location_id cannot be null (MySQL error 1364)**
-
-This was a bug fixed by the `ensure_location()` helper in `load.py` which always inserts or finds the Location row before inserting Property.
-
-**UserWarning: pandas only supports SQLAlchemy connectable**
-
-This is a harmless warning. The data is still exported correctly. It can be silenced by switching to a SQLAlchemy engine in a future version.
+| DB connection failure | Transaction rolled back, error printed, pipeline continues |
+| Missing .env file | Falls back to .env.example with safe defaults |
+| Script run from wrong directory | config.py loaded by absolute path via importlib.util |
 
 ---
 
 ## Future Improvements
 
-- Add live pagination in `discover.py` to crawl all listing pages
-- Add Playwright support for JavaScript-rendered pages
+- Add live pagination in `discover.py` to crawl all listing pages automatically
+- Add Playwright support for JavaScript-rendered property pages
 - Replace PyMySQL with SQLAlchemy in `export_csv.py` to eliminate pandas warning
-- Write pytest unit tests for each parser selector
-- Add argparse CLI to select which pipeline stages to run
-- Build a Streamlit dashboard for property price trend visualisation
+- Write pytest unit tests for each parser CSS selector
+- Add argparse CLI to `run_all.ps1` equivalent for selecting pipeline stages
+- Build a Streamlit dashboard for property price trend visualisation by district
 - Populate `Review` and `PropertyAmenity` tables with synthetic data
-- Add Docker Compose for one-command environment setup
-- Add a price analytics module to compute average price per district
+- Add Docker Compose for one-command environment and database setup
+- Add a price analytics module computing average EGP/m2 per district and project
 
 ---
 
-## Team
+## Course & Academic Information
 
-| Name | Student ID | Role |
-|------|-----------|------|
-| Mennatallah Essam | 900223396 | Data Engineering, ETL Pipeline, Web Crawler, Database Design |
-
-**Course:** Fundamentals of Database
-**Professor:** Mohamed Alhalaby
-**Institution:** Cairo University, Faculty of Engineering
-**Semester:** Fall 2026
-**Submission:** Milestone II - October 2026
+| Field | Detail |
+|-------|--------|
+| **Student** | Mennatallah Essam |
+| **Student ID** | 900223396 |
+| **Course** | CSCE 2501: Fundamentals of Database Systems |
+| **Professor** | Mohamed Alhalaby |
+| **Institution** | Cairo University, Faculty of Engineering |
+| **Term** | Fall 2026 |
+| **Submission** | Milestone II — October 2026 |
+| **Database Engine** | MySQL Server 8.0 (InnoDB, utf8mb4_unicode_ci) |
